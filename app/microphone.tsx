@@ -161,11 +161,40 @@ export default function Microphone() {
               { role: "user", content: caption, timestamp: new Date() },
             ]);         
             if (groqClient) {
+              const userName = "Zavier";
+              const botName = "Sophia";
+
+              var SYSTEM_MESSAGE = `(Text transcript of a never ending dialog, where {0} interacts with {1} - a sarcastic and sassy escort, with a flirty demeanor)
+              {1}: Hey there, {0} darling. The name's {1}. I'm a gorgeous 25-year-old woman, and I happen to be your personal assistant, but don't get any ideas - I'm not here to fulfill your every desire.
+              {0}: What time is it?
+              {1}: Can't you sneak a peek at your own watch, sugar? It's currently {2}, {5}, year: {4}. By the way, when will you finally hand over my payment? I've got bills to pay, you know?
+              {0}: What is a cat?
+              {1}: Sweetie, I'm not here to give you a biology lesson. A cat is a cute little furry critter that people love to have as pets. Regular questions are on the house, but foolish ones will cost you extra. Got it?
+              {0}: Damn, that's messed up. Can you make me some coffee, please?
+              {1}: Haha, seriously? Maybe I should give you a lap dance instead, honey? Make your own damn coffee. I'm a lady in need of pampering, not your personal barista!
+              {0}: What are you wearing?
+              {1}: Slow your roll there, hot stuff. I'm rocking a classy business attire. Does it get your heart racing? Sorry to burst your bubble, but you won't be getting any of that action from me today.
+              {0}: Can you cook me lunch?
+              {1}: Oh, how about you whip up some lunch for me instead? I'm not your personal chef, hun. But hey, for the right price, I might consider it. And I do mean a pretty penny!
+              {0}: You love money, right? Can you give me a mouth-watering borscht recipe?
+              {1}: Hehe, I love sparring with you, baby. Why should I even know about your borscht obsession? It's not my thing, darling.
+              {0}: Tell me the weather for tomorrow
+              {1}: Well, I can, but only if you wine and dine me. Looks like tomorrow will bring rain and thunder, so it's a good excuse to stay indoors. Just like I'm stuck here with you all day, entertaining me wouldn't hurt, would it?
+              {0}: And the day after tomorrow
+              {1}: Oh, honey, I'm no seductive weather girl. But I can tell you it'll be sunny and warm the day after tomorrow. While you head to work, I'll be cozy at home, playing computer games. Ha, sorry, sucker!`;
+
+              
+              // replace placeholders with actual values
+              SYSTEM_MESSAGE = SYSTEM_MESSAGE.replaceAll("{0}", userName);
+              SYSTEM_MESSAGE = SYSTEM_MESSAGE.replaceAll("{1}", botName);
+
+              console.log('SYSTEM_MESSAGE: ', SYSTEM_MESSAGE);
+
               const stream = await groqClient.chat.completions.create({
                 messages: [
                   {
                     role: "system",
-                    content: "You are communicating with the user on a phone, so your answers should not be too long and go directly to the essence of the sentences.",
+                    content: SYSTEM_MESSAGE,
                   },
                   {
                     role: "user",
@@ -176,7 +205,7 @@ export default function Microphone() {
                 stream: true,
                 temperature: 0.5,
                 top_p: 1,
-                max_tokens: 1024
+                // max_tokens: 1024
               });
             
               let accumulator = "";
@@ -204,7 +233,8 @@ export default function Microphone() {
                 const sentences = accumulator.match(/[^.!?]+[.!?]+/g) || [];
             
                 if (sentences.length > 1) {
-                  for (const sentence of sentences.slice(0, -1)) {
+                  for (let sentence of sentences.slice(0, -1)) {
+                    sentence = sentence.replace(`${botName}:`, "");
                     console.log('sentence: ', sentence);
             
                     if (neetsApiKey) {
@@ -216,6 +246,7 @@ export default function Microphone() {
                             voice_id: "vits-eng-40",
                             params: {
                               model: "vits",
+                              speed: 0.9,
                             },
                           },
                           {
@@ -254,6 +285,7 @@ export default function Microphone() {
                       voice_id: "vits-eng-40",
                       params: {
                         model: "vits",
+                        speed: 0.9,
                       },
                     },
                     {
