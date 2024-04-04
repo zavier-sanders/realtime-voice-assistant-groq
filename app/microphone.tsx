@@ -32,6 +32,8 @@ export default function Microphone() {
   const [userMedia, setUserMedia] = useState<MediaStream | null>();
   const [caption, setCaption] = useState<string | null>();
   const [audio, setAudio] = useState<HTMLAudioElement | null>();
+  const [chatLogs, setChatLogs] = useState<{ role: string; content: string; timestamp: Date }[]>([]);
+  const [isSpeaking, setSpeaking] = useState(false);
 
   const toggleMicrophone = useCallback(async () => {
     if (microphone && userMedia) {
@@ -117,15 +119,16 @@ export default function Microphone() {
   }, [apiKey]);
 
   useEffect(() => {
+    if (isSpeaking) return;
     
     if (apiKey && "key" in apiKey) {
       console.log("connecting to deepgram");
       const deepgram = createClient(apiKey?.key ?? "");
       const connection = deepgram.listen.live({
-        model: "nova",
+        model: "nova-2",
         interim_results: false,
         language: "en-US",
-        smart_format: true,
+        smart_format: true
       });
 
       connection.on(LiveTranscriptionEvents.Open, () => {
@@ -140,62 +143,147 @@ export default function Microphone() {
         setConnection(null);
       });
 
-      connection.on(LiveTranscriptionEvents.Transcript, (data) => {
+      connection.on(LiveTranscriptionEvents.Transcript, async (data)=> {
+        setSpeaking(true);
         const words = data.channel.alternatives[0].words;
+        
         const caption = words
           .map((word: any) => word.punctuated_word ?? word.word)
           .join(" ");
+        
         if (caption !== "") {
           setCaption(caption);
-          if (data.is_final) {            
+          console.log(caption);
+          if (data.speech_final) {   
+            // Store the speaker's transcription in the chat logs
+            setChatLogs((prevLogs) => [
+              ...prevLogs,
+              { role: "user", content: caption, timestamp: new Date() },
+            ]);         
             if (groqClient) {
-              const completion = groqClient.chat.completions
-              .create({
+              const stream = await groqClient.chat.completions.create({
                 messages: [
                   {
-                    role: "assistant",
+                    role: "system",
                     content: "You are communicating with the user on a phone, so your answers should not be too long and go directly to the essence of the sentences.",
                   },
                   {
                     role: "user",
                     content: caption,
-                  }
+                  },
                 ],
                 model: "mixtral-8x7b-32768",
-              })
-              .then((chatCompletion) => {
-                if (neetsApiKey) {
-                  setCaption(chatCompletion.choices[0]?.message?.content || "");
-                  axios.post("https://api.neets.ai/v1/tts", {
-                      text: chatCompletion.choices[0]?.message?.content || "",
-                      voice_id: 'us-female-2',
-                      params: {
-                        model: 'style-diff-500'
+                stream: true,
+                temperature: 0.5,
+                top_p: 1,
+                max_tokens: 1024
+              });
+            
+              let accumulator = "";
+              const audioQueue = [];
+              let isPlayingAudio = false;
+            
+              const playNextAudio = () => {
+                if (audioQueue.length > 0 && !isPlayingAudio) {
+                  isPlayingAudio = true;
+                  const audio = audioQueue.shift();
+                  audio.play();
+                  audio.onended = () => {
+                    isPlayingAudio = false;
+                    playNextAudio();
+                  };
+                }
+              };
+            
+              for await (const chunk of stream) {
+                const delta = chunk.choices[0]?.delta?.content || "";
+                accumulator += delta;
+                setCaption(accumulator);
+            
+                // Split the accumulated response based on sentence boundaries
+                const sentences = accumulator.match(/[^.!?]+[.!?]+/g) || [];
+            
+                if (sentences.length > 1) {
+                  for (const sentence of sentences.slice(0, -1)) {
+                    console.log('sentence: ', sentence);
+            
+                    if (neetsApiKey) {
+                      try {
+                        const response = await axios.post(
+                          "https://api.neets.ai/v1/tts",
+                          {
+                            text: sentence,
+                            voice_id: "vits-eng-40",
+                            params: {
+                              model: "vits",
+                            },
+                          },
+                          {
+                            headers: {
+                              "Content-Type": "application/json",
+                              "X-API-Key": neetsApiKey,
+                            },
+                            responseType: "arraybuffer",
+                          }
+                        );
+            
+                        const blob = new Blob([response.data], { type: "audio/mp3" });
+                        const url = URL.createObjectURL(blob);
+                        const audio = new Audio(url);
+                        audioQueue.push(audio);
+                        playNextAudio();
+                      } catch (error) {
+                        console.error(error);
                       }
+                    }
+                  }
+            
+                  // Update the accumulator with the remaining incomplete sentence
+                  accumulator = sentences[sentences.length - 1];
+                }
+              }
+            
+              // Process the remaining incomplete sentence, if any
+              if (accumulator.trim() !== "" && neetsApiKey) {
+                try {
+                  console.log('sentence: ', accumulator);
+                  const response = await axios.post(
+                    "https://api.neets.ai/v1/tts",
+                    {
+                      text: accumulator,
+                      voice_id: "vits-eng-40",
+                      params: {
+                        model: "vits",
+                      },
                     },
                     {
                       headers: {
-                        'Content-Type': 'application/json',
-                        'X-API-Key': neetsApiKey
+                        "Content-Type": "application/json",
+                        "X-API-Key": neetsApiKey,
                       },
-                      responseType: 'arraybuffer'
+                      responseType: "arraybuffer",
                     }
-                    ).then((response) => {
-                      const blob = new Blob([response.data], { type: 'audio/mp3' });
-                      const url = URL.createObjectURL(blob);
-
-                      const audio = new Audio(url);
-                      setAudio(audio);
-                      console.log('Playing audio.');
-                      
-                      audio.play();
-                    })
-                    .catch((error) => {
-                      console.error(error);
-                    });
+                  );
+            
+                  const blob = new Blob([response.data], { type: "audio/mp3" });
+                  const url = URL.createObjectURL(blob);
+                  const audio = new Audio(url);
+                  audioQueue.push(audio);
+                  playNextAudio();
+                } catch (error) {
+                  console.error(error);
                 }
-              });
-
+              }
+            
+              // Store the assistant's transcription in the chat logs
+              setChatLogs((prevLogs) => [
+                ...prevLogs,
+                {
+                  role: "assistant",
+                  content: accumulator,
+                  timestamp: new Date(),
+                },
+              ]);
             }
           }
         }
@@ -204,12 +292,17 @@ export default function Microphone() {
       setConnection(connection);
       setLoading(false);
     }
-  }, [apiKey]);
+  }, [apiKey, isSpeaking]);
 
   useEffect(() => {
     const processQueue = async () => {
       if (size > 0 && !isProcessing) {
         setProcessing(true);
+
+        // if (isSpeaking) {
+        //   remove();
+        //   setSpeaking(false);
+        // }
 
         if (isListening) {
           const blob = first;
@@ -225,7 +318,7 @@ export default function Microphone() {
     };
 
     processQueue();
-  }, [connection, queue, remove, first, size, isProcessing, isListening]);
+  }, [connection, queue, remove, first, size, isProcessing, isListening, isSpeaking]);
 
   function handleAudio() {
     return audio && audio.currentTime > 0 && !audio.paused && !audio.ended && audio.readyState > 2;
@@ -242,7 +335,7 @@ export default function Microphone() {
     <div className="w-full relative">
       <div className="relative flex w-screen flex justify-center items-center max-w-screen-lg place-items-center content-center before:pointer-events-none after:pointer-events-none before:absolute before:right-0 after:right-1/4 before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px]">
       <Siriwave
-        theme="ios9"
+        color="#6adc92"
         autostart={handleAudio() || false}
        />
       </div>
